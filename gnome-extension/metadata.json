@@ -1,0 +1,8 @@
+{
+  "name": "Claude Code Limits Indicator",
+  "uuid": "claude-status@panel.local",
+  "description": "Показывает остаток лимитов Claude Code (5ч и 7д окна) в панели GNOME Shell",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/khromenokroman/claude-status",
+  "version": "1.0.0"
+}

@@ -1,0 +1,2 @@
+------------------------------------------------------------
+[+] 1.0.0.0.2026-11-07 claude-status - создан проект: Python-скрипт claude_usage.py (запрос лимитов через GET api.anthropic.com/api/oauth/usage с заголовком anthropic-beta: oauth-2025-04-20, токен из ~/.claude/.credentials.json), GNOME-расширение gnome-extension (ESM, UUID claude-status@panel.local, индикатор с процентом недельного окна и меню с 5ч/7д окнами и countdown до сброса), README.md с инструкцией установки.
