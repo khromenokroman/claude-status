@@ -1,19 +1,25 @@
-// Claude Code Limits Indicator для GNOME Shell 45+
+// Claude Code Limits Indicator для GNOME Shell 48+
 // Показывает процент использования лимитов в панели,
 // при клике раскрывается меню с деталями.
 
-import * as Extension from 'resource:///org/gnome/shell/extensions/extension.js';
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import St from 'gi://St';
+import Clutter from 'gi://Clutter';
 
-const {GObject, GLib, St} = imports.gi;
-const Main = imports.ui.main;
-const PanelMenu = imports.ui.panelMenu;
-const IndicatorBase = imports.indicators.indicator.IndicatorBase;
+import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const SCRIPT_PATH = GLib.build_filenamev([
     GLib.get_user_config_dir(),
     'claude-status',
     'claude_usage.py'
 ]);
+const PYTHON_BIN = '/usr/bin/python3';
+const REFRESH_INTERVAL_SECONDS = 300;
+const TMP_FILE = '/tmp/claude-status-usage.json';
 
 function parseIsoUtc(ts) {
     if (!ts)
@@ -54,122 +60,266 @@ function formatLimitLine(label, utilization, resetsAt) {
     return `${label}: ${pct}%${cd}`;
 }
 
-function buildTooltip(data) {
-    if (!data || !data.ok) {
-        return 'Claude Code: данные недоступны';
-    }
-    const lines = [];
-    if (data.plan)
-        lines.push(`План: ${data.plan}`);
-    if (data.five_hour)
-        lines.push(formatLimitLine('5ч окно', data.five_hour.utilization, data.five_hour.resets_at));
-    if (data.seven_day)
-        lines.push(formatLimitLine('7д окно', data.seven_day.utilization, data.seven_day.resets_at));
-    return lines.join('\n') || 'Claude Code: данных нет';
+function formatPanelLabel(fiveHour, sevenDay) {
+    const parts = [];
+    if (fiveHour && fiveHour.utilization !== null)
+        parts.push(`5ч: ${Math.round(fiveHour.utilization)}%`);
+    if (sevenDay && sevenDay.utilization !== null)
+        parts.push(`7д: ${Math.round(sevenDay.utilization)}%`);
+    return parts.join(' | ') || 'CC';
 }
 
-function runPython(callback) {
+function readResultFile() {
     try {
-        const result = GLib.spawn_command_line_sync(`python3 ${SCRIPT_PATH}`);
-        const success = result[0];
-        const stdout = new TextDecoder().decode(result[1]);
-        const stderr = new TextDecoder().decode(result[2]);
-        if (!success) {
-            callback(null, `python3: ${stderr.trim()}`);
-        } else {
-            const data = JSON.parse(stdout);
-            callback(data, null);
-        }
-    } catch (e) {
-        callback(null, e.message);
+        const f = Gio.File.new_for_path(TMP_FILE);
+        const [ok, content] = f.load_contents(null);
+        if (!ok)
+            return null;
+        return new TextDecoder().decode(content);
+    } catch {
+        return null;
     }
 }
 
-class ClaudeStatusIndicator extends IndicatorBase {
+class ClaudeStatusIndicator {
     constructor() {
-        super('claude-status', 'claude-status-symbolic.svg');
-        this._label = new St.Label({ text: 'CC' });
-        this._menu = new PanelMenu.PanelMenu(this._label);
-        Main.panel.addToStatusArea('claudeStatus', this, 100);
+        this._button = new PanelMenu.Button(0.5, 'Claude Code Limits');
 
-        this._header = this._menu.addMenuItem(new St.Label({
-            text: 'Claude Code',
-            style_class: 'panel-label',
-        }));
+        this._label = new St.Label({
+            text: 'CC',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._button.add_child(this._label);
 
-        this._line1 = this._menu.addMenuItem(new St.Label({ text: 'загрузка…' }));
-        this._line2 = this._menu.addMenuItem(new St.Label({ text: '' }));
-        this._statusLine = this._menu.addMenuItem(new St.Label({ text: '' }));
+        this._menu = this._button.menu;
+        this._buildMenu();
 
+        this._addToPanel();
+
+        this._refreshing = false;
+        this._lastData = null;
+        this._lastUpdate = null;
         this._timer = null;
         this._start();
     }
 
+    _addToPanel() {
+        // По умолчанию: справа в _rightBox
+        let position = 0;
+        let box = 'right';
+
+        // Пытаемся вставить слева от индикатора клавиатуры (языка)
+        try {
+            const keyboard = Main.panel.statusArea['keyboard'];
+            if (keyboard) {
+                const container = keyboard.container;
+                const parent = container.get_parent();
+                if (parent) {
+                    const siblings = [];
+                    for (let c = parent.get_first_child(); c; c = c.get_next_sibling())
+                        siblings.push(c);
+                    const idx = siblings.indexOf(container);
+                    if (idx >= 0) {
+                        parent.insert_child_at_index(this._button.container, idx);
+                        box = null; // уже добавили вручную
+                        position = idx;
+                    }
+                }
+            }
+        } catch {
+            // fallback: стандартное добавление
+        }
+
+        if (box !== null) {
+            Main.panel.addToStatusArea('claudeStatus', this._button, position, box);
+        } else {
+            // Ручное добавление: регистрируем в statusArea
+            Main.panel.statusArea['claudeStatus'] = this._button;
+            const destroyId = this._button.connect('destroy', emitter => {
+                delete Main.panel.statusArea['claudeStatus'];
+                emitter.disconnect(destroyId);
+            });
+            this._button.connect('menu-set', Main.panel._onMenuSet.bind(Main.panel));
+            Main.panel._onMenuSet(this._button);
+        }
+    }
+
+    _buildMenu() {
+        this._menu.removeAll();
+
+        const headerItem = new PopupMenu.PopupMenuItem('Claude Code');
+        this._menu.addMenuItem(headerItem);
+
+        const line1Item = new PopupMenu.PopupMenuItem('загрузка…');
+        this._line1 = line1Item.label;
+        this._menu.addMenuItem(line1Item);
+
+        const line2Item = new PopupMenu.PopupMenuItem('');
+        this._line2 = line2Item.label;
+        this._menu.addMenuItem(line2Item);
+
+        const timeItem = new PopupMenu.PopupMenuItem('');
+        this._timeLine = timeItem.label;
+        this._menu.addMenuItem(timeItem);
+
+        const planItem = new PopupMenu.PopupMenuItem('');
+        this._planLine = planItem.label;
+        this._menu.addMenuItem(planItem);
+
+        const intervalItem = new PopupMenu.PopupMenuItem(
+            `Автообновление: каждые ${REFRESH_INTERVAL_SECONDS / 60} мин`
+        );
+        this._menu.addMenuItem(intervalItem);
+
+        const sep = new PopupMenu.PopupSeparatorMenuItem();
+        this._menu.addMenuItem(sep);
+
+        const linkItem = new PopupMenu.PopupMenuItem('Открыть страницу лимитов');
+        linkItem.connect('activate', () => {
+            const url = 'https://claude.ai/settings/usage';
+            const ctx = global.create_app_launch_context(0, -1);
+            Gio.AppInfo.launch_default_for_uri(url, ctx);
+        });
+        this._menu.addMenuItem(linkItem);
+    }
+
     _start() {
         this._refresh();
-        this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
-            this._refresh();
-            return GLib.SOURCE_CONTINUE;
-        });
+        this._timer = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            REFRESH_INTERVAL_SECONDS,
+            () => {
+                this._refresh();
+                return GLib.SOURCE_CONTINUE;
+            }
+        );
     }
 
     _refresh() {
-        runPython((data, error) => {
-            if (error) {
-                this._label.set_text('CC');
-                this._line1.set_text('Ошибка');
-                this._line2.set_text(error);
-                this._statusLine.set_text('');
-                return;
-            }
-            if (!data || !data.ok) {
-                this._label.set_text('CC');
-                this._line1.set_text('Нет данных');
-                this._line2.set_text(data?.error || 'неизвестная ошибка');
-                this._statusLine.set_text('');
-                return;
-            }
+        if (this._refreshing)
+            return;
+        this._refreshing = true;
 
-            // Основной текст на панели: процент недельного окна
-            const weekly = data.seven_day;
-            if (weekly && weekly.utilization !== null) {
-                this._label.set_text(`${Math.round(weekly.utilization)}%`);
-            } else {
-                this._label.set_text('CC');
-            }
+        this._line1.set_text('загрузка…');
+        this._line2.set_text('');
 
-            this._line1.set_text(
-                formatLimitLine('5ч окно', data.five_hour?.utilization, data.five_hour?.resets_at)
-            );
-            this._line2.set_text(
-                formatLimitLine('7д окно', data.seven_day?.utilization, data.seven_day?.resets_at)
+        const cmd = `${PYTHON_BIN} ${SCRIPT_PATH} > ${TMP_FILE} 2>&1`;
+        const argv = ['/bin/sh', '-c', cmd];
+
+        try {
+            const [success, pid] = GLib.spawn_async(
+                null, argv, null,
+                GLib.SpawnFlags.SEARCH_PATH |
+                GLib.SpawnFlags.STDOUT_TO_DEV_NULL |
+                GLib.SpawnFlags.STDERR_TO_DEV_NULL,
+                null
             );
 
-            // Строка статуса (severity)
-            const activeLimit = (data.limits || []).find(l => l.is_active);
-            if (activeLimit) {
-                const severity = activeLimit.severity || 'normal';
-                const color = severity === 'critical' ? '#ff5555' :
-                              severity === 'warning' ? '#ffaa00' : '#88ff88';
-                this._statusLine.set_markup(
-                    `<span foreground="${color}">Активный лимит: ${activeLimit.kind} (${activeLimit.percent}%)</span>`
+            if (success) {
+                GLib.child_watch_add(
+                    GLib.PRIORITY_DEFAULT,
+                    pid,
+                    (child, status) => {
+                        this._refreshing = false;
+                        const raw = readResultFile();
+                        if (raw === null) {
+                            this._applyError('Не удалось прочитать результат');
+                            return;
+                        }
+                        let data;
+                        try {
+                            data = JSON.parse(raw);
+                        } catch (e) {
+                            this._applyError(raw.slice(0, 200));
+                            return;
+                        }
+                        this._applyData(data);
+                    }
                 );
             } else {
-                this._statusLine.set_text('');
+                this._refreshing = false;
+                this._applyError('spawn_async: не удалось запустить python3');
             }
-        });
+        } catch (e) {
+            this._refreshing = false;
+            this._applyError(String(e));
+        }
+    }
+
+    _applyError(error) {
+        // При ошибке показываем последние успешные данные, если они есть
+        if (this._lastData) {
+            this._applyData(this._lastData);
+        } else {
+            this._label.set_text('CC');
+            this._line1.set_text('Ошибка');
+            this._line2.set_text(error.slice(0, 200));
+            this._timeLine.set_text('Время обновления: нет данных');
+            this._planLine.set_text('Тариф: неизвестен');
+        }
+    }
+
+    _applyData(data) {
+        if (!data || !data.ok) {
+            this._applyError((data && data.error) || 'неизвестная ошибка');
+            return;
+        }
+
+        // Сохраняем успешные данные
+        this._lastData = data;
+        this._lastUpdate = new Date();
+
+        // Текст на панели: "5ч: 5% | 7д: 8%"
+        this._label.set_text(
+            formatPanelLabel(data.five_hour, data.seven_day)
+        );
+
+        // Меню: детали
+        this._line1.set_text(
+            formatLimitLine('5ч окно',
+                data.five_hour?.utilization,
+                data.five_hour?.resets_at)
+        );
+        this._line2.set_text(
+            formatLimitLine('7д окно',
+                data.seven_day?.utilization,
+                data.seven_day?.resets_at)
+        );
+
+        // Время последнего обновления
+        if (this._lastUpdate) {
+            this._timeLine.set_text(
+                `Обновлено: ${this._lastUpdate.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit', second: '2-digit'})}`
+            );
+        } else {
+            this._timeLine.set_text('Время обновления: нет данных');
+        }
+
+        // Тариф
+        if (data.plan) {
+            this._planLine.set_text(`Тариф: ${data.plan}`);
+        } else {
+            this._planLine.set_text('Тариф: неизвестен');
+        }
     }
 
     destroy() {
         if (this._timer)
             GLib.source_remove(this._timer);
+        this._timer = null;
+        this._refreshing = false;
+
+        this._menu.removeAll();
         this._menu.destroy();
+        this._button.destroy();
         this._label.destroy();
-        super.destroy();
     }
 }
 
-export default class ClaudeStatusExtension extends Extension.Extension {
+export default class ClaudeStatusExtension extends Extension {
     constructor(...args) {
         super(...args);
         this._indicator = null;
