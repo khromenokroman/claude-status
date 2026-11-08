@@ -10,6 +10,8 @@
 - `claude_usage.py` - Python-скрипт, запрашивает лимиты у Anthropic API
   и печатает JSON на stdout.
 - `gnome-extension/` - расширение GNOME Shell (ESM, GNOME Shell 48+).
+- `install.sh` - скрипт автоматической установки.
+- `uninstall.sh` - скрипт автоматического удаления.
 - `whatsnew.txt` - журнал изменений.
 
 ## Как работает
@@ -27,7 +29,19 @@
 
 ## Установка
 
-### 1. Python-скрипт
+### Автоматическая установка
+
+```bash
+./install.sh
+gnome-extensions enable claude-status@panel.local
+```
+
+Скрипт `install.sh` копирует файлы в `~/.config/claude-status/` и
+`~/.local/share/gnome-shell/extensions/claude-status@panel.local/`.
+
+### Ручная установка
+
+#### 1. Python-скрипт
 
 Скопируйте `claude_usage.py` в пользовательский каталог настроек:
 
@@ -37,7 +51,7 @@ cp claude_usage.py ~/.config/claude-status/
 chmod +x ~/.config/claude-status/claude_usage.py
 ```
 
-### 2. GNOME-расширение
+#### 2. GNOME-расширение
 
 Скопируйте папку `gnome-extension/` в каталог расширений:
 
@@ -45,7 +59,7 @@ chmod +x ~/.config/claude-status/claude_usage.py
 cp -r gnome-extension ~/.local/share/gnome-shell/extensions/claude-status@panel.local
 ```
 
-### 3. Активация
+#### 3. Активация
 
 ```bash
 gnome-extensions enable claude-status@panel.local
@@ -81,6 +95,16 @@ gnome-extensions enable claude-status@panel.local
 запустите `claude` в терминале ещё раз.
 
 ## Снятие
+
+### Автоматическое удаление
+
+```bash
+./uninstall.sh
+```
+
+Скрипт отключает расширение и удаляет все файлы.
+
+### Ручное удаление
 
 ```bash
 gnome-extensions disable claude-status@panel.local
