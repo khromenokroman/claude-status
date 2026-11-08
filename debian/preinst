@@ -1,8 +1,0 @@
-#!/bin/sh
-# Препремотражение: создаём каталоги
-
-set -e
-
-# Создаём каталог для файлов пакета
-install -d /usr/share/claude-status
-install -d /usr/share/claude-status/gnome-extension
