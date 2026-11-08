@@ -85,14 +85,30 @@ class ClaudeStatusIndicator {
     constructor() {
         this._button = new PanelMenu.Button(0.5, 'Claude Code Limits');
 
+        // Создаём box с иконкой и лейблом
+        this._box = new St.BoxLayout({
+            x_expand: true,
+            y_expand: true,
+            vertical: false,
+        });
+
+        // Иконка (таймер) - как у батареи
+        this._icon = new St.Icon({
+            icon_name: 'alarm',
+            icon_size: 16,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._box.add_child(this._icon);
+
         this._label = new St.Label({
             text: 'CC',
             x_expand: true,
             x_align: Clutter.ActorAlign.CENTER,
-            y_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._button.add_child(this._label);
+        this._box.add_child(this._label);
+
+        this._button.add_child(this._box);
 
         this._menu = this._button.menu;
         this._buildMenu();
@@ -315,6 +331,8 @@ class ClaudeStatusIndicator {
         this._menu.removeAll();
         this._menu.destroy();
         this._button.destroy();
+        this._box.destroy();
+        this._icon.destroy();
         this._label.destroy();
     }
 }
