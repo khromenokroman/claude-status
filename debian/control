@@ -1,0 +1,37 @@
+# Copyright (C) 2024 Roma Khromenok <roma55592@yandex.ru>
+#
+# License: MIT
+#
+# SPDX-License-Identifier: MIT
+
+Source: claude-status
+Section: utils
+Priority: optional
+Maintainer: Roma Khromenok <roma55592@yandex.ru>
+Build-Depends:
+    debhelper-compat (= 13),
+    dh-python
+Standards-Version: 4.6.0
+Homepage: https://github.com/khromenokroman/claude-status
+
+Package: claude-status
+Architecture: all
+Depends:
+    gnome-shell (>= 48.0),
+    python3
+Description: GNOME Shell extension showing Claude Code usage limits
+ Claude Code Limits Indicator (claude-status) is a GNOME Shell extension
+ that displays the usage of Claude Code API rate limits (5-hour and
+ 7-day windows) in the top panel.
+
+ It shows a percentage indicator next to the clock and language
+ selector. Clicking the indicator opens a menu with details:
+   - 5-hour window usage with countdown to reset
+   - 7-day window usage with countdown to reset
+   - Last update time
+   - Current plan (Pro/Free)
+   - Link to open the usage page in browser
+
+ The extension uses an OAuth token from ~/.claude/.credentials.json
+ (created automatically by the `claude` CLI) and queries the
+ Anthropic API every 5 minutes.
